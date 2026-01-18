@@ -9,6 +9,7 @@ import io
 
 import httpx
 import PyPDF2
+from docx import Document
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -102,6 +103,14 @@ class RAGService:
                 parts.append("")
         return "\n".join(parts)
 
+    def _extract_text_from_docx_bytes(self, docx_bytes: bytes) -> str:
+        """Extract text from Word document bytes"""
+        try:
+            doc = Document(io.BytesIO(docx_bytes))
+            return "\n".join([para.text for para in doc.paragraphs])
+        except Exception as e:
+            return f"Error extracting Word document: {str(e)}"
+
     def _rebuild_index(self, user_id: str) -> None:
         chunks = self._store.get(user_id, [])
         if not chunks:
@@ -143,6 +152,38 @@ class RAGService:
             course_name=course_name,
             document_name=document_name,
         )
+
+    async def index_docx_bytes(
+        self,
+        docx_bytes: bytes,
+        user_id: str,
+        course_name: str,
+        document_name: str,
+    ) -> dict:
+        text = self._extract_text_from_docx_bytes(docx_bytes)
+        return await self.index_document(
+            text_content=text,
+            user_id=user_id,
+            course_name=course_name,
+            document_name=document_name,
+        )
+
+    async def index_file_bytes(
+        self,
+        file_bytes: bytes,
+        file_name: str,
+        user_id: str,
+        course_name: str,
+        document_name: str,
+    ) -> dict:
+        """Index file bytes - auto-detects PDF or Word based on filename"""
+        lower_name = file_name.lower()
+        if lower_name.endswith('.pdf'):
+            return await self.index_pdf_bytes(file_bytes, user_id, course_name, document_name)
+        elif lower_name.endswith('.docx') or lower_name.endswith('.doc'):
+            return await self.index_docx_bytes(file_bytes, user_id, course_name, document_name)
+        else:
+            return {"success": False, "chunks_indexed": 0, "error": f"Unsupported file type: {file_name}"}
 
     async def index_document(
         self,

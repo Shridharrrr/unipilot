@@ -1,4 +1,4 @@
-"""File upload endpoint for direct PDF uploads"""
+"""File upload endpoint for PDF and Word document uploads"""
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
@@ -9,23 +9,32 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 rag_service = get_rag_service()
 
+# Supported file extensions
+SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.doc'}
+
 
 def _get_user_id(user: dict) -> str:
     return user.get("id") or user.get("uid") or "unknown"
 
 
+def _is_supported_file(filename: str) -> bool:
+    """Check if the file extension is supported"""
+    lower_name = filename.lower()
+    return any(lower_name.endswith(ext) for ext in SUPPORTED_EXTENSIONS)
+
+
 @router.post("/upload")
-async def upload_pdf(
+async def upload_document(
     file: UploadFile = File(...),
     course_name: str = Form(...),
     document_name: str = Form(None),
     user: dict = Depends(get_current_user),
 ):
     """
-    Upload a PDF file directly and index it for RAG.
+    Upload a PDF or Word file directly and index it for RAG.
     
     Args:
-        file: PDF file to upload
+        file: PDF or Word file to upload (.pdf, .docx, .doc)
         course_name: Name of the course this document belongs to
         document_name: Optional custom name for the document (defaults to filename)
         user: Current authenticated user
@@ -36,10 +45,10 @@ async def upload_pdf(
     user_id = _get_user_id(user)
     
     # Validate file type
-    if not file.filename.lower().endswith('.pdf'):
+    if not _is_supported_file(file.filename):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are supported"
+            detail="Only PDF and Word files (.pdf, .docx, .doc) are supported"
         )
     
     # Validate file size (50MB limit)
@@ -55,9 +64,10 @@ async def upload_pdf(
         # Use provided document name or fall back to filename
         doc_name = document_name or file.filename
         
-        # Index the PDF bytes
-        result = await rag_service.index_pdf_bytes(
-            pdf_bytes=content,
+        # Index the file bytes (auto-detects type based on extension)
+        result = await rag_service.index_file_bytes(
+            file_bytes=content,
+            file_name=file.filename,
             user_id=user_id,
             course_name=course_name,
             document_name=doc_name,
@@ -66,7 +76,7 @@ async def upload_pdf(
         if not result.get('success'):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result.get('error', 'Failed to index PDF')
+                detail=result.get('error', 'Failed to index document')
             )
         
         return {
@@ -82,5 +92,5 @@ async def upload_pdf(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process PDF: {str(e)}"
+            detail=f"Failed to process document: {str(e)}"
         )

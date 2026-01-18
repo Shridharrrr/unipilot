@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Chip,
   CircularProgress,
   Container,
@@ -18,6 +19,10 @@ import {
   Divider,
   IconButton,
   LinearProgress,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
   Paper,
   TextField,
   Typography
@@ -54,7 +59,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: "👋 Hello! I'm your AI Assistant. Upload course materials or connect your Google Classroom to get started. I can help you understand your study materials, answer questions, and assist with your coursework!",
+      content: "👋 Hello! I'm your AI Assistant. Upload course materials (PDF or Word) or connect your Google Classroom to get started. I can help you understand your study materials, answer questions, and assist with your coursework!",
       timestamp: new Date().toISOString()
     }
   ]);
@@ -81,6 +86,12 @@ export default function ChatPage() {
   const [uploadDocumentName, setUploadDocumentName] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+
+  // Materials selection dialog states
+  const [materialsDialogOpen, setMaterialsDialogOpen] = useState(false);
+  const [availableMaterials, setAvailableMaterials] = useState([]);
+  const [selectedMaterials, setSelectedMaterials] = useState([]);
+  const [loadingMaterials, setLoadingMaterials] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -155,20 +166,65 @@ export default function ChatPage() {
     }
   };
 
-  const syncClassroomMaterials = async () => {
+  const openMaterialsDialog = async () => {
+    try {
+      setLoadingMaterials(true);
+      setMaterialsDialogOpen(true);
+      const token = await getIdToken();
+      if (!token) return;
+      setAuthToken(token);
+      const resp = await classroomAPI.listMaterials();
+      setAvailableMaterials(resp.data.materials || []);
+      setSelectedMaterials([]);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to fetch classroom materials');
+      setMaterialsDialogOpen(false);
+    } finally {
+      setLoadingMaterials(false);
+    }
+  };
+
+  const syncSelectedMaterials = async () => {
+    if (selectedMaterials.length === 0) {
+      toast.warning('Please select at least one document to sync');
+      return;
+    }
+
     try {
       setClassroomSyncing(true);
       const token = await getIdToken();
       if (!token) return;
       setAuthToken(token);
-      const resp = await classroomAPI.syncMaterials(null);
+
+      const materialsToSync = availableMaterials.filter((m, idx) => selectedMaterials.includes(idx));
+      const resp = await classroomAPI.syncMaterials(materialsToSync);
       toast.success(resp.data.message || 'Sync complete! Materials indexed successfully.');
       await loadDocuments();
+      setMaterialsDialogOpen(false);
+      setSelectedMaterials([]);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to sync classroom materials');
     } finally {
       setClassroomSyncing(false);
       await checkClassroomStatus();
+    }
+  };
+
+  const toggleMaterialSelection = (idx) => {
+    setSelectedMaterials(prev => {
+      if (prev.includes(idx)) {
+        return prev.filter(i => i !== idx);
+      } else {
+        return [...prev, idx];
+      }
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedMaterials.length === availableMaterials.length) {
+      setSelectedMaterials([]);
+    } else {
+      setSelectedMaterials(availableMaterials.map((_, idx) => idx));
     }
   };
 
@@ -277,8 +333,10 @@ export default function ChatPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      toast.error('Only PDF files are supported');
+    const allowedExtensions = ['.pdf', '.docx', '.doc'];
+    const fileName = file.name.toLowerCase();
+    if (!allowedExtensions.some(ext => fileName.endsWith(ext))) {
+      toast.error('Only PDF and Word files (.docx, .doc) are supported');
       return;
     }
 
@@ -449,7 +507,7 @@ export default function ChatPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf"
+              accept=".pdf,.docx,.doc,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
               style={{ display: 'none' }}
               onChange={handleFileSelect}
             />
@@ -461,7 +519,7 @@ export default function ChatPage() {
             ) : documents.length === 0 ? (
               <Alert severity="info" sx={{ borderRadius: 2, bgcolor: 'rgba(102, 126, 234, 0.05)' }}>
                 <Typography variant="body2" fontWeight="500">No documents yet</Typography>
-                <Typography variant="caption">Upload a PDF or sync Google Classroom to get started</Typography>
+                <Typography variant="caption">Upload PDF/Word or sync Google Classroom to get started</Typography>
               </Alert>
             ) : (
               <Box>
@@ -548,7 +606,7 @@ export default function ChatPage() {
                 <Button
                   variant="contained"
                   size="medium"
-                  onClick={syncClassroomMaterials}
+                  onClick={openMaterialsDialog}
                   disabled={!classroomConnected || classroomSyncing}
                   startIcon={classroomSyncing ? <CircularProgress size={16} color="inherit" /> : <SyncIcon />}
                   fullWidth
@@ -809,8 +867,8 @@ export default function ChatPage() {
         <Dialog open={uploadDialogOpen} onClose={() => !uploading && setUploadDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
           <DialogTitle sx={{ pb: 1 }}>
             <Box>
-              <Box component="span" sx={{ fontSize: '1.25rem', fontWeight: 600, display: 'block' }}>📤 Upload PDF Document</Box>
-              <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', display: 'block', mt: 0.5 }}>Upload a PDF file from your device</Box>
+              <Box component="span" sx={{ fontSize: '1.25rem', fontWeight: 600, display: 'block' }}>📤 Upload Document</Box>
+              <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', display: 'block', mt: 0.5 }}>Upload a PDF or Word file from your device</Box>
             </Box>
           </DialogTitle>
           <DialogContent>
@@ -854,6 +912,106 @@ export default function ChatPage() {
               startIcon={uploading ? <CircularProgress size={16} /> : <CloudUploadIcon />}
             >
               {uploading ? 'Uploading...' : 'Upload & Index'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Materials Selection Dialog */}
+        <Dialog
+          open={materialsDialogOpen}
+          onClose={() => setMaterialsDialogOpen(false)}
+          maxWidth="md"
+          fullWidth
+          PaperProps={{ sx: { borderRadius: 3 } }}
+        >
+          <DialogTitle sx={{ pb: 1 }}>
+            <Box>
+              <Box component="span" sx={{ fontSize: '1.25rem', fontWeight: 600, display: 'block' }}>📚 Select Materials to Sync</Box>
+              <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', display: 'block', mt: 0.5 }}>
+                Choose documents from your Google Classroom to sync
+              </Box>
+            </Box>
+          </DialogTitle>
+          <DialogContent>
+            {loadingMaterials ? (
+              <Box display="flex" justifyContent="center" alignItems="center" py={4}>
+                <CircularProgress />
+                <Typography variant="body2" sx={{ ml: 2 }}>Loading materials...</Typography>
+              </Box>
+            ) : availableMaterials.length === 0 ? (
+              <Alert severity="info" sx={{ mt: 2, borderRadius: 2 }}>
+                No documents found in your Google Classroom courses.
+              </Alert>
+            ) : (
+              <>
+                <Box display="flex" justifyContent="space-between" alignItems="center" my={2}>
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedMaterials.length} of {availableMaterials.length} selected
+                  </Typography>
+                  <Button
+                    size="small"
+                    onClick={toggleSelectAll}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    {selectedMaterials.length === availableMaterials.length ? 'Deselect All' : 'Select All'}
+                  </Button>
+                </Box>
+                <List sx={{ maxHeight: 400, overflow: 'auto' }}>
+                  {availableMaterials.map((material, idx) => (
+                    <ListItem
+                      key={idx}
+                      disablePadding
+                      sx={{ mb: 1 }}
+                    >
+                      <ListItemButton
+                        dense
+                        onClick={() => toggleMaterialSelection(idx)}
+                        sx={{
+                          borderRadius: 2,
+                          border: '1px solid',
+                          borderColor: selectedMaterials.includes(idx) ? 'primary.main' : 'grey.300',
+                          bgcolor: selectedMaterials.includes(idx) ? 'primary.light' : 'transparent',
+                          '&:hover': {
+                            bgcolor: selectedMaterials.includes(idx) ? 'primary.light' : 'grey.50',
+                          },
+                        }}
+                      >
+                        <Checkbox
+                          edge="start"
+                          checked={selectedMaterials.includes(idx)}
+                          tabIndex={-1}
+                          disableRipple
+                        />
+                        <ListItemText
+                          primary={
+                            <Typography variant="body2" fontWeight="500">
+                              {material.document_name}
+                            </Typography>
+                          }
+                          secondary={
+                            <Typography variant="caption" color="text.secondary">
+                              📖 {material.course_name}
+                            </Typography>
+                          }
+                        />
+                      </ListItemButton>
+                    </ListItem>
+                  ))}
+                </List>
+              </>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 3 }}>
+            <Button onClick={() => setMaterialsDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={syncSelectedMaterials}
+              disabled={classroomSyncing || selectedMaterials.length === 0}
+              startIcon={classroomSyncing ? <CircularProgress size={16} color="inherit" /> : null}
+            >
+              {classroomSyncing ? 'Syncing...' : `Sync ${selectedMaterials.length} Document${selectedMaterials.length !== 1 ? 's' : ''}`}
             </Button>
           </DialogActions>
         </Dialog>

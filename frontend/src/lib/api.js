@@ -108,7 +108,8 @@ export const classroomAPI = {
     getStatus: () => api.get('/api/classroom/status'),
     disconnect: () => api.post('/api/classroom/disconnect'),
     getCourses: () => api.get('/api/classroom/courses'),
-    syncMaterials: (courseId) => api.post('/api/classroom/sync-materials', { course_id: courseId || null }),
+    listMaterials: () => api.get('/api/classroom/list-materials'),
+    syncMaterials: (materials) => api.post('/api/classroom/sync-materials', { materials }),
 };
 
 // Project endpoints

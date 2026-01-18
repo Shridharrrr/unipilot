@@ -146,7 +146,24 @@ class GoogleClassroomService:
         return fh.getvalue()
 
     @staticmethod
+    def is_supported_file(name: Optional[str], mime_type: Optional[str]) -> bool:
+        """Check if the file is a supported document type (PDF or Word)"""
+        supported_mimes = {
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+            "application/msword",  # .doc
+        }
+        if mime_type in supported_mimes:
+            return True
+        if name:
+            lower_name = name.lower()
+            if lower_name.endswith(('.pdf', '.docx', '.doc')):
+                return True
+        return False
+
+    @staticmethod
     def is_pdf_file(name: Optional[str], mime_type: Optional[str]) -> bool:
+        """Check if the file is a PDF (kept for backward compatibility)"""
         if mime_type == "application/pdf":
             return True
         if name and name.lower().endswith(".pdf"):

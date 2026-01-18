@@ -90,30 +90,19 @@ async def list_courses(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=classroom_service.safe_google_error(e))
 
 
-@router.post("/sync-materials")
-async def sync_materials(payload: dict, current_user: dict = Depends(get_current_user)):
+@router.get("/list-materials")
+async def list_materials(current_user: dict = Depends(get_current_user)):
+    """List all available PDF and Word materials from Google Classroom courses"""
     tokens = firebase_service.get_google_classroom_tokens(current_user['id'])
     if not tokens:
         raise HTTPException(status_code=400, detail="Google Classroom not connected")
 
-    course_id = payload.get('course_id')
-
     try:
         classroom_svc = classroom_service.get_classroom_service(tokens)
         drive_svc = classroom_service.get_drive_service(tokens)
-
-        if course_id:
-            try:
-                course = classroom_service.get_course(classroom_svc, course_id)
-                courses = [course]
-            except Exception:
-                courses = [{"id": course_id}]
-        else:
-            courses = classroom_service.list_courses(classroom_svc)
-
-        indexed = 0
-        skipped = 0
-        errors = []
+        
+        courses = classroom_service.list_courses(classroom_svc)
+        all_materials = []
 
         for c in courses:
             cid = c.get('id')
@@ -124,12 +113,10 @@ async def sync_materials(payload: dict, current_user: dict = Depends(get_current
 
             try:
                 materials = classroom_service.list_coursework_materials(classroom_svc, cid)
-            except Exception as e:
-                errors.append(f"course {cid}: {classroom_service.safe_google_error(e)}")
+            except Exception:
                 continue
 
             for item in materials:
-                course_name = course_display_name
                 drive_files = classroom_service.extract_drive_file_ids(item)
 
                 for f in drive_files:
@@ -138,26 +125,75 @@ async def sync_materials(payload: dict, current_user: dict = Depends(get_current
 
                     try:
                         meta = classroom_service.get_drive_file_metadata(drive_svc, file_id)
-                        if not classroom_service.is_pdf_file(meta.get('name'), meta.get('mimeType')):
-                            skipped += 1
-                            continue
+                        if classroom_service.is_supported_file(meta.get('name'), meta.get('mimeType')):
+                            all_materials.append({
+                                "file_id": file_id,
+                                "course_id": cid,
+                                "course_name": course_display_name,
+                                "document_name": meta.get('name') or title,
+                                "title": title,
+                            })
+                    except Exception:
+                        continue
 
-                        pdf_bytes = classroom_service.download_drive_file(drive_svc, file_id)
-                        result = await rag_service.index_pdf_bytes(
-                            pdf_bytes=pdf_bytes,
-                            user_id=current_user['id'],
-                            course_name=str(course_name),
-                            document_name=str(meta.get('name') or title),
-                        )
-                        if result.get('success'):
-                            indexed += 1
-                        else:
-                            errors.append(f"{title}: {result.get('error')}")
-                    except Exception as e:
-                        errors.append(f"{title}: {classroom_service.safe_google_error(e)}")
+        return {"materials": all_materials}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=classroom_service.safe_google_error(e))
+
+
+@router.post("/sync-materials")
+async def sync_materials(payload: dict, current_user: dict = Depends(get_current_user)):
+    tokens = firebase_service.get_google_classroom_tokens(current_user['id'])
+    if not tokens:
+        raise HTTPException(status_code=400, detail="Google Classroom not connected")
+
+    # Get list of materials to sync
+    materials_to_sync = payload.get('materials', [])
+    if not materials_to_sync:
+        raise HTTPException(status_code=400, detail="No materials selected for sync")
+
+    try:
+        drive_svc = classroom_service.get_drive_service(tokens)
+
+        indexed = 0
+        skipped = 0
+        errors = []
+
+        for material in materials_to_sync:
+            file_id = material.get('file_id')
+            course_name = material.get('course_name')
+            document_name = material.get('document_name')
+
+            if not file_id:
+                continue
+
+            try:
+                meta = classroom_service.get_drive_file_metadata(drive_svc, file_id)
+                if not classroom_service.is_supported_file(meta.get('name'), meta.get('mimeType')):
+                    skipped += 1
+                    continue
+
+                file_bytes = classroom_service.download_drive_file(drive_svc, file_id)
+                file_name = meta.get('name') or 'document.pdf'
+                result = await rag_service.index_file_bytes(
+                    file_bytes=file_bytes,
+                    file_name=file_name,
+                    user_id=current_user['id'],
+                    course_name=str(course_name),
+                    document_name=str(document_name or file_name),
+                )
+                if result.get('success'):
+                    indexed += 1
+                else:
+                    errors.append(f"{document_name}: {result.get('error')}")
+            except Exception as e:
+                errors.append(f"{document_name}: {classroom_service.safe_google_error(e)}")
 
         return {
-            "message": f"Indexed {indexed} PDFs. Skipped {skipped} non-PDF files.",
+            "message": f"Indexed {indexed} documents. Skipped {skipped} unsupported files.",
             "indexed": indexed,
             "skipped": skipped,
             "errors": errors if errors else None,
